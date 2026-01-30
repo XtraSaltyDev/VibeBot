@@ -147,9 +147,32 @@
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "ai",
+    "assistant",
+    "chatbot",
+    "claude",
+    "anthropic",
+    "whatsapp",
+    "telegram",
+    "discord",
+    "slack",
+    "signal",
+    "imessage",
+    "multi-channel",
+    "ai-agent",
+    "personal-assistant"
+  ],
+  "author": "XtraSaltyDev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XtraSaltyDev/VibeBot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/XtraSaltyDev/VibeBot/issues"
+  },
+  "homepage": "https://github.com/XtraSaltyDev/VibeBot#readme",
   "engines": {
     "node": ">=22.12.0"
   },
