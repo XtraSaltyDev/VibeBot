@@ -56,16 +56,16 @@ vibebot agent --message "What can you help me with?" --thinking high
 - **First-class tools** — browser, canvas, nodes, cron, sessions, and more
 
 ### Supported Channels
-- [WhatsApp](https://docs.molt.bot/channels/whatsapp) (Baileys)
-- [Telegram](https://docs.molt.bot/channels/telegram) (grammY)
-- [Slack](https://docs.molt.bot/channels/slack) (Bolt)
-- [Discord](https://docs.molt.bot/channels/discord) (discord.js)
-- [Google Chat](https://docs.molt.bot/channels/googlechat) (Chat API)
-- [Signal](https://docs.molt.bot/channels/signal) (signal-cli)
-- [iMessage](https://docs.molt.bot/channels/imessage) (imsg)
-- [Microsoft Teams](https://docs.molt.bot/channels/msteams) (extension)
-- [Matrix](https://docs.molt.bot/channels/matrix) (extension)
-- WebChat
+- **WhatsApp** — via Baileys (Web API)
+- **Telegram** — via grammY
+- **Slack** — via Bolt
+- **Discord** — via discord.js
+- **Google Chat** — via Chat API
+- **Signal** — via signal-cli
+- **iMessage** — via imsg (macOS only)
+- **Microsoft Teams** — extension
+- **Matrix** — extension
+- **WebChat** — built-in web interface
 
 ### Apps & Nodes
 - **macOS app**: Menu bar control, Voice Wake/PTT, Talk Mode overlay, WebChat
@@ -119,7 +119,7 @@ pnpm test
 
 ## Configuration
 
-Minimal config (`~/.vibebot/config.json`):
+Minimal config (`~/.vibebot/vibebot.json`):
 
 ```json5
 {
