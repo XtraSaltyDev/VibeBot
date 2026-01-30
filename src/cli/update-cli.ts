@@ -111,16 +111,17 @@ const UPDATE_QUIPS = [
 ];
 
 const MAX_LOG_CHARS = 8000;
-const DEFAULT_PACKAGE_NAME = "moltbot";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "moltbot"]);
+const DEFAULT_PACKAGE_NAME = "vibebot";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "moltbot", "clawdbot"]);
 const CLI_NAME = resolveCliName();
-const CLAWDBOT_REPO_URL = "https://github.com/moltbot/moltbot.git";
-const DEFAULT_GIT_DIR = path.join(os.homedir(), "moltbot");
+const VIBEBOT_REPO_URL = "https://github.com/XtraSaltyDev/VibeBot.git";
+const DEFAULT_GIT_DIR = path.join(os.homedir(), "vibebot");
 
 function normalizeTag(value?: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
+  if (trimmed.startsWith("vibebot@")) return trimmed.slice("vibebot@".length);
   if (trimmed.startsWith("moltbot@")) return trimmed.slice("moltbot@".length);
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
@@ -261,7 +262,7 @@ async function ensureGitCheckout(params: {
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", CLAWDBOT_REPO_URL, params.dir],
+      argv: ["git", "clone", VIBEBOT_REPO_URL, params.dir],
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -276,7 +277,7 @@ async function ensureGitCheckout(params: {
     }
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", CLAWDBOT_REPO_URL, params.dir],
+      argv: ["git", "clone", VIBEBOT_REPO_URL, params.dir],
       cwd: params.dir,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
