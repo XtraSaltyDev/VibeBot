@@ -1,8 +1,7 @@
 import { detectBinary } from "../../../commands/onboard-helpers.js";
 import { installSignalCli } from "../../../commands/signal-install.js";
-import type { MoltbotConfig } from "../../../config/config.js";
-import type { DmPolicy } from "../../../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import type { SignalAccountConfig } from "../../../config/types.js";
+import { normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -11,159 +10,128 @@ import {
 import { formatDocsLink } from "../../../terminal/links.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { normalizeE164 } from "../../../utils.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
+import { setChannelProperty } from "./common.js";
+import {
+  createChannelOnboardingAdapter,
+  type AllowFromValidationResult,
+  type ChannelOnboardingSpec,
+} from "./factory.js";
+import { promptAccountId } from "./helpers.js";
 
 const channel = "signal" as const;
 
-function setSignalDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy) {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.signal?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      signal: {
-        ...cfg.channels?.signal,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
-}
-
-function setSignalAllowFrom(
-  cfg: MoltbotConfig,
-  accountId: string,
-  allowFrom: string[],
-): MoltbotConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        signal: {
-          ...cfg.channels?.signal,
-          allowFrom,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      signal: {
-        ...cfg.channels?.signal,
-        accounts: {
-          ...cfg.channels?.signal?.accounts,
-          [accountId]: {
-            ...cfg.channels?.signal?.accounts?.[accountId],
-            allowFrom,
-          },
-        },
-      },
-    },
-  };
-}
-
-function parseSignalAllowFromInput(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
+/**
+ * Check if a string looks like a UUID.
+ */
 function isUuidLike(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-async function promptSignalAllowFrom(params: {
-  cfg: MoltbotConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<MoltbotConfig> {
-  const accountId =
-    params.accountId && normalizeAccountId(params.accountId)
-      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
-      : resolveDefaultSignalAccountId(params.cfg);
-  const resolved = resolveSignalAccount({ cfg: params.cfg, accountId });
-  const existing = resolved.config.allowFrom ?? [];
-  await params.prompter.note(
-    [
-      "Allowlist Signal DMs by sender id.",
-      "Examples:",
-      "- +15555550123",
-      "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/signal", "signal")}`,
-    ].join("\n"),
-    "Signal allowlist",
-  );
-  const entry = await params.prompter.text({
-    message: "Signal allowFrom (E.164 or uuid)",
-    placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
-    initialValue: existing[0] ? String(existing[0]) : undefined,
-    validate: (value) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
-      const parts = parseSignalAllowFromInput(raw);
-      for (const part of parts) {
-        if (part === "*") continue;
-        if (part.toLowerCase().startsWith("uuid:")) {
-          if (!part.slice("uuid:".length).trim()) return "Invalid uuid entry";
-          continue;
-        }
-        if (isUuidLike(part)) continue;
-        if (!normalizeE164(part)) return `Invalid entry: ${part}`;
-      }
-      return undefined;
-    },
-  });
-  const parts = parseSignalAllowFromInput(String(entry));
-  const normalized = parts
-    .map((part) => {
-      if (part === "*") return "*";
-      if (part.toLowerCase().startsWith("uuid:")) return `uuid:${part.slice(5).trim()}`;
-      if (isUuidLike(part)) return `uuid:${part}`;
-      return normalizeE164(part);
-    })
-    .filter(Boolean);
-  const unique = [...new Set(normalized)];
-  return setSignalAllowFrom(params.cfg, accountId, unique);
+/**
+ * Validate a Signal allowFrom entry.
+ * Supports:
+ * - E.164 phone numbers (+15555550123)
+ * - UUID entries (uuid:123e4567-e89b-12d3-a456-426614174000)
+ * - Raw UUIDs (detected and normalized to uuid: prefix)
+ */
+function validateSignalAllowFromEntry(entry: string): AllowFromValidationResult {
+  const trimmed = entry.trim();
+  if (!trimmed) return { error: "Empty entry" };
+
+  // Wildcard
+  if (trimmed === "*") return {};
+
+  // UUID with prefix
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    const uuid = trimmed.slice("uuid:".length).trim();
+    if (!uuid) {
+      return { error: "Invalid uuid entry" };
+    }
+    return { normalized: `uuid:${uuid}` };
+  }
+
+  // Raw UUID (looks like UUID without prefix)
+  if (isUuidLike(trimmed)) {
+    return { normalized: `uuid:${trimmed}` };
+  }
+
+  // E.164 phone number
+  const normalized = normalizeE164(trimmed);
+  if (!normalized) {
+    return { error: `Invalid entry: ${entry}` };
+  }
+
+  return { normalized };
 }
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
-  label: "Signal",
-  channel,
-  policyKey: "channels.signal.dmPolicy",
-  allowFromKey: "channels.signal.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.signal?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setSignalDmPolicy(cfg, policy),
-  promptAllowFrom: promptSignalAllowFrom,
-};
+/**
+ * Normalize a Signal allowFrom entry.
+ */
+function normalizeSignalAllowFromEntry(entry: string): string {
+  const trimmed = entry.trim();
+  if (trimmed === "*") return "*";
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    return `uuid:${trimmed.slice(5).trim()}`;
+  }
+  if (isUuidLike(trimmed)) {
+    return `uuid:${trimmed}`;
+  }
+  return normalizeE164(trimmed) ?? trimmed;
+}
 
-export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
+/**
+ * Signal onboarding spec for the factory.
+ */
+const signalOnboardingSpec: ChannelOnboardingSpec<"signal", SignalAccountConfig> = {
   channel,
-  getStatus: async ({ cfg }) => {
-    const configured = listSignalAccountIds(cfg).some(
-      (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
-    );
-    const signalCliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
-    const signalCliDetected = await detectBinary(signalCliPath);
+  label: "Signal",
+
+  // Account management
+  listAccountIds: listSignalAccountIds,
+  resolveDefaultAccountId: resolveDefaultSignalAccountId,
+  resolveAccount: ({ cfg, accountId }) => {
+    const resolved = resolveSignalAccount({ cfg, accountId });
     return {
-      channel,
-      configured,
-      statusLines: [
-        `Signal: ${configured ? "configured" : "needs setup"}`,
-        `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
-      ],
-      selectionHint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
-      quickstartScore: signalCliDetected ? 1 : 0,
+      config: resolved.config,
+      configured: resolved.configured,
     };
   },
-  configure: async ({
+
+  // Binary detection
+  binaryName: "signal-cli",
+  getBinaryPath: (_cfg, accountConfig) => accountConfig.cliPath ?? "signal-cli",
+
+  // Status display
+  getStatusLines: ({ cfg, configured, binaryDetected }) => {
+    const cliPath = cfg.channels?.signal?.cliPath ?? "signal-cli";
+    return [
+      `Signal: ${configured ? "configured" : "needs setup"}`,
+      `signal-cli: ${binaryDetected ? "found" : "missing"} (${cliPath})`,
+    ];
+  },
+  getSelectionHint: ({ binaryDetected }) =>
+    binaryDetected ? "signal-cli found" : "signal-cli missing",
+  getQuickstartScore: ({ binaryDetected }) => (binaryDetected ? 1 : 0),
+
+  // AllowFrom validation
+  validateAllowFromEntry: validateSignalAllowFromEntry,
+  normalizeAllowFromEntry: normalizeSignalAllowFromEntry,
+  allowFromExamples: ["+15555550123", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+  allowFromPlaceholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
+  allowFromHelpNote: [
+    "Allowlist Signal DMs by sender id.",
+    "Examples:",
+    "- +15555550123",
+    "- uuid:123e4567-e89b-12d3-a456-426614174000",
+    "Multiple entries: comma-separated.",
+  ],
+
+  // Docs
+  docsPath: "/signal",
+
+  // Custom configure to handle signal-cli installation
+  customConfigure: async ({
     cfg,
     runtime,
     prompter,
@@ -176,6 +144,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     let signalAccountId = signalOverride
       ? normalizeAccountId(signalOverride)
       : defaultSignalAccountId;
+
     if (shouldPromptAccountIds && !signalOverride) {
       signalAccountId = await promptAccountId({
         cfg,
@@ -195,6 +164,8 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     const accountConfig = resolvedAccount.config;
     let resolvedCliPath = accountConfig.cliPath ?? "signal-cli";
     let cliDetected = await detectBinary(resolvedCliPath);
+
+    // Offer to install signal-cli
     if (options?.allowSignalInstall) {
       const wantsInstall = await prompter.confirm({
         message: cliDetected
@@ -225,6 +196,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
       );
     }
 
+    // Prompt for Signal account (phone number)
     let account = accountConfig.account ?? "";
     if (account) {
       const keep = await prompter.confirm({
@@ -244,40 +216,11 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     if (account) {
-      if (signalAccountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            signal: {
-              ...next.channels?.signal,
-              enabled: true,
-              account,
-              cliPath: resolvedCliPath ?? "signal-cli",
-            },
-          },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            signal: {
-              ...next.channels?.signal,
-              enabled: true,
-              accounts: {
-                ...next.channels?.signal?.accounts,
-                [signalAccountId]: {
-                  ...next.channels?.signal?.accounts?.[signalAccountId],
-                  enabled: next.channels?.signal?.accounts?.[signalAccountId]?.enabled ?? true,
-                  account,
-                  cliPath: resolvedCliPath ?? "signal-cli",
-                },
-              },
-            },
-          },
-        };
-      }
+      next = setChannelProperty(next, channel, signalAccountId, {
+        enabled: true,
+        account,
+        cliPath: resolvedCliPath ?? "signal-cli",
+      });
     }
 
     await prompter.note(
@@ -292,12 +235,10 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
 
     return { cfg: next, accountId: signalAccountId };
   },
-  dmPolicy,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      signal: { ...cfg.channels?.signal, enabled: false },
-    },
-  }),
 };
+
+/**
+ * Signal onboarding adapter created via factory.
+ */
+export const signalOnboardingAdapter: ChannelOnboardingAdapter =
+  createChannelOnboardingAdapter(signalOnboardingSpec);
