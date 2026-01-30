@@ -1,6 +1,9 @@
 import type { MoltbotConfig } from "../config/config.js";
 import { getChannelDock } from "../channels/dock.js";
-import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupToolsPolicy,
+} from "../config/group-policy.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -246,6 +249,12 @@ export function resolveGroupToolPolicy(params: {
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) return undefined;
+  const groupPolicy = resolveChannelGroupPolicy({
+    cfg: params.config,
+    channel,
+    groupId,
+    accountId: params.accountId,
+  });
   let dock;
   try {
     dock = getChannelDock(channel);
@@ -274,7 +283,14 @@ export function resolveGroupToolPolicy(params: {
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-  return pickToolPolicy(toolsConfig);
+  const basePolicy = pickToolPolicy(toolsConfig);
+  if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+    const deny = ["group:memory"];
+    if (!basePolicy) return { deny };
+    const baseDeny = Array.isArray(basePolicy.deny) ? basePolicy.deny : [];
+    return { ...basePolicy, deny: Array.from(new Set([...baseDeny, ...deny])) };
+  }
+  return basePolicy;
 }
 
 export function isToolAllowedByPolicies(

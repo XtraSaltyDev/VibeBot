@@ -15,6 +15,63 @@ import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 
+function normalizeSlug(value?: string | null): string {
+  if (!value) return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function randomSlugSuffix(length = 4): string {
+  return Math.random()
+    .toString(36)
+    .slice(2, 2 + length);
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveUniqueSlug(params: {
+  rawSlug?: string | null;
+  memoryDir: string;
+  dateStr: string;
+}): Promise<{ slug: string; filename: string; filePath: string; reason?: string }> {
+  const normalized = normalizeSlug(params.rawSlug);
+  const base = normalized || "session";
+  const needsSuffix = !normalized;
+  let candidate = needsSuffix ? `${base}-${randomSlugSuffix()}` : base;
+  let hadCollision = false;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const filename = `${params.dateStr}-${candidate}.md`;
+    const filePath = path.join(params.memoryDir, filename);
+    if (!(await fileExists(filePath))) {
+      const reason = normalized ? (hadCollision ? "collision" : undefined) : "invalid";
+      return { slug: candidate, filename, filePath, reason };
+    }
+    hadCollision = true;
+    candidate = `${base}-${randomSlugSuffix()}`;
+  }
+
+  const fallback = `${base}-${randomSlugSuffix()}-${randomSlugSuffix(2)}`;
+  const filename = `${params.dateStr}-${fallback}.md`;
+  return {
+    slug: fallback,
+    filename,
+    filePath: path.join(params.memoryDir, filename),
+    reason: normalized ? "collision" : "invalid",
+  };
+}
+
 /**
  * Read recent messages from session file for slug generation
  */
@@ -127,18 +184,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
-    if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1]!.split(".")[0]!.replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
-      console.log("[session-memory] Using fallback timestamp slug:", slug);
+    const resolved = await resolveUniqueSlug({
+      rawSlug: slug,
+      memoryDir,
+      dateStr,
+    });
+    slug = resolved.slug;
+    if (resolved.reason === "invalid") {
+      console.log("[session-memory] Using fallback random slug:", slug);
+    } else if (resolved.reason === "collision") {
+      console.log("[session-memory] Slug already in use; using:", slug);
     }
-
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
-    const memoryFilePath = path.join(memoryDir, filename);
-    console.log("[session-memory] Generated filename:", filename);
-    console.log("[session-memory] Full path:", memoryFilePath);
+    console.log("[session-memory] Generated filename:", resolved.filename);
+    console.log("[session-memory] Full path:", resolved.filePath);
 
     // Format time as HH:MM:SS UTC
     const timeStr = now.toISOString().split("T")[1]!.split(".")[0];
@@ -165,11 +223,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const entry = entryParts.join("\n");
 
     // Write to new memory file
-    await fs.writeFile(memoryFilePath, entry, "utf-8");
+    await fs.writeFile(resolved.filePath, entry, "utf-8");
     console.log("[session-memory] Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
+    const relPath = resolved.filePath.replace(os.homedir(), "~");
     console.log(`[session-memory] Session context saved to ${relPath}`);
   } catch (err) {
     console.error(

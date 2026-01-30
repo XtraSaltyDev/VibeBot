@@ -1,6 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./pi-tools.policy.js";
+import type { MoltbotConfig } from "../config/config.js";
+import {
+  filterToolsByPolicy,
+  isToolAllowedByPolicyName,
+  resolveGroupToolPolicy,
+} from "./pi-tools.policy.js";
 
 function createStubTool(name: string): AgentTool<unknown, unknown> {
   return {
@@ -32,5 +37,24 @@ describe("pi-tools.policy", () => {
 
   it("keeps apply_patch when exec is allowlisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  });
+
+  it("denies memory tools for groups outside the allowlist", () => {
+    const cfg: MoltbotConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            trusted: {},
+          },
+        },
+      },
+    };
+
+    const policy = resolveGroupToolPolicy({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:unknown",
+    });
+
+    expect(policy?.deny).toContain("group:memory");
   });
 });

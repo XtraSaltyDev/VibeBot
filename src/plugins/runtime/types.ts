@@ -163,7 +163,7 @@ type PushTemplateMessage = typeof import("../../line/send.js").pushTemplateMessa
 type PushLocationMessage = typeof import("../../line/send.js").pushLocationMessage;
 type PushTextMessageWithQuickReplies =
   typeof import("../../line/send.js").pushTextMessageWithQuickReplies;
-type CreateQuickReplyItems = typeof import("../../line/send.js").createQuickReplyItems;
+type CreateQuickReplyItems = typeof import("../../line/quick-replies.js").createQuickReplyItems;
 type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;

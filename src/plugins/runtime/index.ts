@@ -35,8 +35,6 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
-import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { recordInboundSession } from "../../channels/session.js";
@@ -44,7 +42,6 @@ import { discordMessageActions } from "../../channels/plugins/actions/discord.js
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
-import { monitorWebChannel } from "../../channels/web/index.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -58,21 +55,8 @@ import {
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
-import { auditDiscordChannelPermissions } from "../../discord/audit.js";
-import {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../discord/directory-live.js";
-import { monitorDiscordProvider } from "../../discord/monitor.js";
-import { probeDiscord } from "../../discord/probe.js";
-import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { monitorIMessageProvider } from "../../imessage/monitor.js";
-import { probeIMessage } from "../../imessage/probe.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getChildLogger } from "../../logging.js";
@@ -90,25 +74,10 @@ import {
 } from "../../pairing/pairing-store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { monitorSignalProvider } from "../../signal/index.js";
-import { probeSignal } from "../../signal/probe.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import { monitorSlackProvider } from "../../slack/index.js";
-import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../slack/directory-live.js";
-import { probeSlack } from "../../slack/probe.js";
-import { resolveSlackChannelAllowlist } from "../../slack/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
-import { sendMessageSlack } from "../../slack/send.js";
 import {
   auditTelegramGroupMembership,
   collectTelegramUnmentionedGroupIds,
 } from "../../telegram/audit.js";
-import { monitorTelegramProvider } from "../../telegram/monitor.js";
-import { probeTelegram } from "../../telegram/probe.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { loadWebMedia } from "../../web/media.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
@@ -119,8 +88,6 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../../web/auth-store.js";
-import { loginWeb } from "../../web/login.js";
-import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { registerMemoryCli } from "../../cli/memory-cli.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
@@ -131,19 +98,8 @@ import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../line/accounts.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
-  createQuickReplyItems,
-  pushMessageLine,
-  pushMessagesLine,
-  pushFlexMessage,
-  pushTemplateMessage,
-  pushLocationMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
-import { monitorLineProvider } from "../../line/monitor.js";
 import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
+import { createQuickReplyItems } from "../../line/quick-replies.js";
 
 import type { PluginRuntime } from "./types.js";
 
@@ -161,6 +117,188 @@ function resolveVersion(): string {
     return cachedVersion;
   }
 }
+
+// Lazily load heavy channel adapters (Slack, Telegram, WhatsApp, LINE, etc.).
+const lazyImport = <T>(loader: () => Promise<T>) => {
+  let cached: Promise<T> | null = null;
+  return () => {
+    if (!cached) cached = loader();
+    return cached;
+  };
+};
+
+const lazyAsync = <TModule, TFunc extends (...args: never[]) => Promise<unknown>>(
+  loader: () => Promise<TModule>,
+  pick: (mod: TModule) => TFunc,
+): TFunc => {
+  const load = lazyImport(loader);
+  return (async (...args: Parameters<TFunc>) => {
+    const mod = await load();
+    return await pick(mod)(...args);
+  }) as TFunc;
+};
+
+const loadDiscordIndex = lazyImport(() => import("../../discord/index.js"));
+const loadDiscordAudit = lazyImport(() => import("../../discord/audit.js"));
+const loadDiscordDirectory = lazyImport(() => import("../../discord/directory-live.js"));
+const loadDiscordProbe = lazyImport(() => import("../../discord/probe.js"));
+const loadDiscordResolveChannels = lazyImport(() => import("../../discord/resolve-channels.js"));
+const loadDiscordResolveUsers = lazyImport(() => import("../../discord/resolve-users.js"));
+
+const auditDiscordChannelPermissions: typeof import("../../discord/audit.js").auditDiscordChannelPermissions =
+  lazyAsync(loadDiscordAudit, (mod) => mod.auditDiscordChannelPermissions);
+const listDiscordDirectoryGroupsLive: typeof import("../../discord/directory-live.js").listDiscordDirectoryGroupsLive =
+  lazyAsync(loadDiscordDirectory, (mod) => mod.listDiscordDirectoryGroupsLive);
+const listDiscordDirectoryPeersLive: typeof import("../../discord/directory-live.js").listDiscordDirectoryPeersLive =
+  lazyAsync(loadDiscordDirectory, (mod) => mod.listDiscordDirectoryPeersLive);
+const probeDiscord: typeof import("../../discord/probe.js").probeDiscord = lazyAsync(
+  loadDiscordProbe,
+  (mod) => mod.probeDiscord,
+);
+const resolveDiscordChannelAllowlist: typeof import("../../discord/resolve-channels.js").resolveDiscordChannelAllowlist =
+  lazyAsync(loadDiscordResolveChannels, (mod) => mod.resolveDiscordChannelAllowlist);
+const resolveDiscordUserAllowlist: typeof import("../../discord/resolve-users.js").resolveDiscordUserAllowlist =
+  lazyAsync(loadDiscordResolveUsers, (mod) => mod.resolveDiscordUserAllowlist);
+const sendMessageDiscord: typeof import("../../discord/index.js").sendMessageDiscord = lazyAsync(
+  loadDiscordIndex,
+  (mod) => mod.sendMessageDiscord,
+);
+const sendPollDiscord: typeof import("../../discord/index.js").sendPollDiscord = lazyAsync(
+  loadDiscordIndex,
+  (mod) => mod.sendPollDiscord,
+);
+const monitorDiscordProvider: typeof import("../../discord/index.js").monitorDiscordProvider =
+  lazyAsync(loadDiscordIndex, (mod) => mod.monitorDiscordProvider);
+
+const loadSlackIndex = lazyImport(() => import("../../slack/index.js"));
+const loadSlackDirectory = lazyImport(() => import("../../slack/directory-live.js"));
+const loadSlackResolveChannels = lazyImport(() => import("../../slack/resolve-channels.js"));
+const loadSlackResolveUsers = lazyImport(() => import("../../slack/resolve-users.js"));
+const loadSlackActions = lazyImport(() => import("../../agents/tools/slack-actions.js"));
+
+const listSlackDirectoryGroupsLive: typeof import("../../slack/directory-live.js").listSlackDirectoryGroupsLive =
+  lazyAsync(loadSlackDirectory, (mod) => mod.listSlackDirectoryGroupsLive);
+const listSlackDirectoryPeersLive: typeof import("../../slack/directory-live.js").listSlackDirectoryPeersLive =
+  lazyAsync(loadSlackDirectory, (mod) => mod.listSlackDirectoryPeersLive);
+const probeSlack: typeof import("../../slack/index.js").probeSlack = lazyAsync(
+  loadSlackIndex,
+  (mod) => mod.probeSlack,
+);
+const resolveSlackChannelAllowlist: typeof import("../../slack/resolve-channels.js").resolveSlackChannelAllowlist =
+  lazyAsync(loadSlackResolveChannels, (mod) => mod.resolveSlackChannelAllowlist);
+const resolveSlackUserAllowlist: typeof import("../../slack/resolve-users.js").resolveSlackUserAllowlist =
+  lazyAsync(loadSlackResolveUsers, (mod) => mod.resolveSlackUserAllowlist);
+const sendMessageSlack: typeof import("../../slack/index.js").sendMessageSlack = lazyAsync(
+  loadSlackIndex,
+  (mod) => mod.sendMessageSlack,
+);
+const monitorSlackProvider: typeof import("../../slack/index.js").monitorSlackProvider = lazyAsync(
+  loadSlackIndex,
+  (mod) => mod.monitorSlackProvider,
+);
+const handleSlackAction: typeof import("../../agents/tools/slack-actions.js").handleSlackAction =
+  lazyAsync(loadSlackActions, (mod) => mod.handleSlackAction);
+
+const loadTelegramIndex = lazyImport(() => import("../../telegram/index.js"));
+const loadTelegramProbe = lazyImport(() => import("../../telegram/probe.js"));
+
+const probeTelegram: typeof import("../../telegram/probe.js").probeTelegram = lazyAsync(
+  loadTelegramProbe,
+  (mod) => mod.probeTelegram,
+);
+const sendMessageTelegram: typeof import("../../telegram/index.js").sendMessageTelegram = lazyAsync(
+  loadTelegramIndex,
+  (mod) => mod.sendMessageTelegram,
+);
+const monitorTelegramProvider: typeof import("../../telegram/index.js").monitorTelegramProvider =
+  lazyAsync(loadTelegramIndex, (mod) => mod.monitorTelegramProvider);
+
+const loadSignalIndex = lazyImport(() => import("../../signal/index.js"));
+const probeSignal: typeof import("../../signal/index.js").probeSignal = lazyAsync(
+  loadSignalIndex,
+  (mod) => mod.probeSignal,
+);
+const sendMessageSignal: typeof import("../../signal/index.js").sendMessageSignal = lazyAsync(
+  loadSignalIndex,
+  (mod) => mod.sendMessageSignal,
+);
+const monitorSignalProvider: typeof import("../../signal/index.js").monitorSignalProvider =
+  lazyAsync(loadSignalIndex, (mod) => mod.monitorSignalProvider);
+
+const loadIMessageIndex = lazyImport(() => import("../../imessage/index.js"));
+const monitorIMessageProvider: typeof import("../../imessage/index.js").monitorIMessageProvider =
+  lazyAsync(loadIMessageIndex, (mod) => mod.monitorIMessageProvider);
+const probeIMessage: typeof import("../../imessage/index.js").probeIMessage = lazyAsync(
+  loadIMessageIndex,
+  (mod) => mod.probeIMessage,
+);
+const sendMessageIMessage: typeof import("../../imessage/index.js").sendMessageIMessage = lazyAsync(
+  loadIMessageIndex,
+  (mod) => mod.sendMessageIMessage,
+);
+
+const loadWebChannel = lazyImport(() => import("../../channels/web/index.js"));
+const loadWebLogin = lazyImport(() => import("../../web/login.js"));
+const loadWebLoginQr = lazyImport(() => import("../../web/login-qr.js"));
+const loadWhatsAppActions = lazyImport(() => import("../../agents/tools/whatsapp-actions.js"));
+
+const monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel = lazyAsync(
+  loadWebChannel,
+  (mod) => mod.monitorWebChannel,
+);
+const loginWeb: typeof import("../../web/login.js").loginWeb = lazyAsync(
+  loadWebLogin,
+  (mod) => mod.loginWeb,
+);
+const startWebLoginWithQr: typeof import("../../web/login-qr.js").startWebLoginWithQr = lazyAsync(
+  loadWebLoginQr,
+  (mod) => mod.startWebLoginWithQr,
+);
+const waitForWebLogin: typeof import("../../web/login-qr.js").waitForWebLogin = lazyAsync(
+  loadWebLoginQr,
+  (mod) => mod.waitForWebLogin,
+);
+const handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction =
+  lazyAsync(loadWhatsAppActions, (mod) => mod.handleWhatsAppAction);
+
+const loadLineSend = lazyImport(() => import("../../line/send.js"));
+const loadLineProbe = lazyImport(() => import("../../line/probe.js"));
+const loadLineMonitor = lazyImport(() => import("../../line/monitor.js"));
+
+const probeLineBot: typeof import("../../line/probe.js").probeLineBot = lazyAsync(
+  loadLineProbe,
+  (mod) => mod.probeLineBot,
+);
+const sendMessageLine: typeof import("../../line/send.js").sendMessageLine = lazyAsync(
+  loadLineSend,
+  (mod) => mod.sendMessageLine,
+);
+const pushMessageLine: typeof import("../../line/send.js").pushMessageLine = lazyAsync(
+  loadLineSend,
+  (mod) => mod.pushMessageLine,
+);
+const pushMessagesLine: typeof import("../../line/send.js").pushMessagesLine = lazyAsync(
+  loadLineSend,
+  (mod) => mod.pushMessagesLine,
+);
+const pushFlexMessage: typeof import("../../line/send.js").pushFlexMessage = lazyAsync(
+  loadLineSend,
+  (mod) => mod.pushFlexMessage,
+);
+const pushTemplateMessage: typeof import("../../line/send.js").pushTemplateMessage = lazyAsync(
+  loadLineSend,
+  (mod) => mod.pushTemplateMessage,
+);
+const pushLocationMessage: typeof import("../../line/send.js").pushLocationMessage = lazyAsync(
+  loadLineSend,
+  (mod) => mod.pushLocationMessage,
+);
+const pushTextMessageWithQuickReplies: typeof import("../../line/send.js").pushTextMessageWithQuickReplies =
+  lazyAsync(loadLineSend, (mod) => mod.pushTextMessageWithQuickReplies);
+const monitorLineProvider: typeof import("../../line/monitor.js").monitorLineProvider = lazyAsync(
+  loadLineMonitor,
+  (mod) => mod.monitorLineProvider,
+);
 
 export function createPluginRuntime(): PluginRuntime {
   return {

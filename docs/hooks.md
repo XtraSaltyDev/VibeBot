@@ -470,7 +470,7 @@ Saves session context to memory when you issue `/new`.
 **Filename examples**:
 - `2026-01-16-vendor-pitch.md`
 - `2026-01-16-api-design.md`
-- `2026-01-16-1430.md` (fallback timestamp if slug generation fails)
+- `2026-01-16-session-a1b2.md` (fallback random slug if generation fails or collides)
 
 **Enable**:
 

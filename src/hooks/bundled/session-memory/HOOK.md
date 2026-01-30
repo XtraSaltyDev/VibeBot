@@ -47,7 +47,7 @@ The LLM generates descriptive slugs based on your conversation:
 - `2026-01-16-vendor-pitch.md` - Discussion about vendor evaluation
 - `2026-01-16-api-design.md` - API architecture planning
 - `2026-01-16-bug-fix.md` - Debugging session
-- `2026-01-16-1430.md` - Fallback timestamp if slug generation fails
+- `2026-01-16-session-a1b2.md` - Fallback random slug if generation fails or collides
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import handler from "./handler.js";
 import { createHookEvent } from "../../hooks.js";
@@ -375,5 +375,44 @@ describe("session-memory hook", () => {
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("falls back to a random slug when the default slug collides", async () => {
+    const tempDir = await makeTempWorkspace("clawdbot-session-memory-");
+    const memoryDir = path.join(tempDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { workspace: tempDir } },
+    };
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId: "test-123",
+      },
+    });
+
+    // Freeze timestamp so filename is deterministic.
+    event.timestamp = new Date("2026-01-30T12:34:56Z");
+    const dateStr = "2026-01-30";
+
+    const suffixFor = (value: number) => value.toString(36).slice(2, 6);
+    const randomSpy = vi.spyOn(Math, "random");
+    randomSpy.mockReturnValueOnce(0.1111).mockReturnValueOnce(0.2222);
+
+    const firstSuffix = suffixFor(0.1111);
+    const secondSuffix = suffixFor(0.2222);
+
+    // Pre-create the first candidate to force a collision.
+    const collidedName = `${dateStr}-session-${firstSuffix}.md`;
+    await fs.writeFile(path.join(memoryDir, collidedName), "collision");
+
+    await handler(event);
+
+    const files = await fs.readdir(memoryDir);
+    expect(files).toContain(`${dateStr}-session-${secondSuffix}.md`);
+
+    randomSpy.mockRestore();
   });
 });
